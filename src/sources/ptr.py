@@ -69,9 +69,12 @@ logger = logging.getLogger(__name__)
 APIFY_API = "https://api.apify.com/v2"
 TOKEN_ENV = "APIFY_TOKEN"
 
+# Deployed actor slugs (Store titles: "U.S. House Congress Trade Tracker"
+# and "U.S. Senate Congress Trade Tracker"). Note the counterintuitive
+# naming: `-1` is the HOUSE actor, the bare name is the SENATE actor.
 ACTORS: dict[str, str] = {
-    "house": "seralifatih~congress-house-trades",
-    "senate": "seralifatih~congress-senate-trades",
+    "house": "seralifatih~congress-trading-pipeline-1",
+    "senate": "seralifatih~congress-trading-pipeline",
 }
 
 # ptr_url fallback when the source row has no per-filing URL yet.
