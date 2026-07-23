@@ -179,6 +179,12 @@ class OverlapRecord(BaseModel):
     # least one trade and one lobbying filing to exist.
     trades: list[Trade] = Field(min_length=1)
     lobbying: list[LobbyingFiling] = Field(min_length=1)
+    lobbying_filing_count: NonNegativeInt = Field(
+        description="Total filings matching this (quarter, sector). When "
+        "greater than len(lobbying), the evidence list was capped to the "
+        "filings with the largest reported amounts — truncation is always "
+        "visible here, never silent.",
+    )
     committees: list[CommitteeAssignment] = Field(default_factory=list)
 
     overlap_type: OverlapType
@@ -192,6 +198,14 @@ class OverlapRecord(BaseModel):
         if self.overlap_type is OverlapType.committee_match and not self.committees:
             raise ValueError(
                 "committee_match overlap requires at least one committee assignment"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _filing_count_covers_list(self) -> OverlapRecord:
+        if self.lobbying_filing_count < len(self.lobbying):
+            raise ValueError(
+                "lobbying_filing_count cannot be smaller than the evidence list"
             )
         return self
 

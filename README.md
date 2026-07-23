@@ -48,6 +48,7 @@ One record per **(member, quarter, sector)** overlap — not one per trade, not 
       "amount_reported": 240000.0
     }
   ],
+  "lobbying_filing_count": 38,
   "committees": [
     {
       "committee_id": "HSAS",
@@ -66,6 +67,10 @@ One record per **(member, quarter, sector)** overlap — not one per trade, not 
 - **`sector_match_only`** — the sector overlap exists, but no committee link does.
 
 LDA filings disclose which chamber or agency was lobbied, not which committee — so committee matching is resolved through sector jurisdiction, and the record shows exactly which committee and which jurisdiction tag produced the match.
+
+### `lobbying_filing_count`
+
+Popular sectors can attract over a thousand filings in a quarter, so the `lobbying[]` evidence list is capped (default 100, configurable) to the filings with the largest reported amounts. `lobbying_filing_count` always carries the uncapped total — truncation is visible on the record, never silent.
 
 ### `disclosure_lag_days`
 

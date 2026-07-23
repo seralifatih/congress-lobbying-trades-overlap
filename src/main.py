@@ -51,6 +51,9 @@ async def main() -> None:
         )
         max_concurrency: int = int(actor_input.get("max_concurrency", 5))
         lda_max_pages: int | None = actor_input.get("lda_max_pages") or None
+        max_filings_per_record: int = int(
+            actor_input.get("max_filings_per_record", 100)
+        )
 
         # LDA key: input field wins, else pre-set env var. lda.py reads env.
         lda_key = actor_input.get("lda_api_key")
@@ -123,6 +126,7 @@ async def main() -> None:
             trades=trades,
             filings=filings,
             crosswalk=crosswalk,
+            max_filings_per_record=max_filings_per_record,
         )
         records = [
             r for r in result.records if r.overlap_type.value in overlap_types

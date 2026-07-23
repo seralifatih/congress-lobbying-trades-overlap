@@ -57,6 +57,15 @@
             "description": "Cap LDA result pages per quarter. Leave empty for full runs; set low (e.g. 5) for cheap test runs.",
             "editor": "number",
             "minimum": 1
+        },
+        "max_filings_per_record": {
+            "title": "Max lobbying filings per record",
+            "type": "integer",
+            "description": "Cap on the lobbying evidence list per overlap record (largest reported amounts kept). The record's lobbying_filing_count always shows the uncapped total.",
+            "editor": "number",
+            "default": 100,
+            "minimum": 1,
+            "maximum": 1000
         }
     },
     "required": []

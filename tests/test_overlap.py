@@ -81,7 +81,9 @@ def make_trade(
 
 
 def make_filing(
-    uuid: str = "uuid-1", issue_codes: list[str] | None = None
+    uuid: str = "uuid-1",
+    issue_codes: list[str] | None = None,
+    amount: float | None = 100000.0,
 ) -> LobbyingFiling:
     return LobbyingFiling(
         lda_filing_uuid=uuid,
@@ -89,7 +91,7 @@ def make_filing(
         registrant="Reg LLC",
         client="Client Corp",
         issue_codes=issue_codes or ["DEF"],
-        amount_reported=100000.0,
+        amount_reported=amount,
     )
 
 
@@ -375,6 +377,64 @@ class TestReporting:
             xwalk,
         )
         assert result.unmapped_issue_codes == []
+
+
+# ---------------------------------------------------------------------------
+# Evidence capping — lobbying_filing_count always carries the real total
+# ---------------------------------------------------------------------------
+class TestFilingCap:
+    def _run_with_filings(
+        self, xwalk: Crosswalk, filings: list[LobbyingFiling], cap: int
+    ):
+        member = make_member()
+        return build_overlaps(
+            members={member.bioguide_id: member},
+            trades=[MemberTrade(member.bioguide_id, make_trade("LMT"))],
+            filings=[QuarterFiling("2026-Q1", f) for f in filings],
+            crosswalk=xwalk,
+            max_filings_per_record=cap,
+        )
+
+    def test_no_truncation_below_cap(self, xwalk: Crosswalk) -> None:
+        filings = [make_filing(f"u-{i}") for i in range(3)]
+        result = self._run_with_filings(xwalk, filings, cap=10)
+        record = next(r for r in result.records if r.sector == "defense")
+        assert len(record.lobbying) == 3
+        assert record.lobbying_filing_count == 3
+
+    def test_cap_keeps_largest_amounts(self, xwalk: Crosswalk) -> None:
+        filings = [
+            make_filing("u-null", amount=None),
+            make_filing("u-small", amount=5000.0),
+            make_filing("u-big", amount=900000.0),
+            make_filing("u-mid", amount=40000.0),
+        ]
+        result = self._run_with_filings(xwalk, filings, cap=2)
+        record = next(r for r in result.records if r.sector == "defense")
+        # Largest two amounts kept; final list re-sorted by uuid for
+        # stable reading order.
+        assert {f.lda_filing_uuid for f in record.lobbying} == {"u-big", "u-mid"}
+        assert record.lobbying_filing_count == 4
+
+    def test_cap_null_amounts_dropped_first(self, xwalk: Crosswalk) -> None:
+        filings = [
+            make_filing("u-null1", amount=None),
+            make_filing("u-null2", amount=None),
+            make_filing("u-paid", amount=100.0),
+        ]
+        result = self._run_with_filings(xwalk, filings, cap=2)
+        record = next(r for r in result.records if r.sector == "defense")
+        kept = {f.lda_filing_uuid for f in record.lobbying}
+        assert "u-paid" in kept
+        assert record.lobbying_filing_count == 3
+
+    def test_cap_deterministic_on_ties(self, xwalk: Crosswalk) -> None:
+        filings = [make_filing(f"u-{i}", amount=None) for i in range(5)]
+        r1 = self._run_with_filings(xwalk, filings, cap=3)
+        r2 = self._run_with_filings(xwalk, list(reversed(filings)), cap=3)
+        k1 = [f.lda_filing_uuid for r in r1.records for f in r.lobbying]
+        k2 = [f.lda_filing_uuid for r in r2.records for f in r.lobbying]
+        assert k1 == k2
 
 
 # ---------------------------------------------------------------------------

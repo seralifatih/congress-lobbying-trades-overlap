@@ -101,6 +101,16 @@ def _best_mapping(a: Mapping, b: Mapping) -> Mapping:
     return a if ka <= kb else b
 
 
+def _filing_evidence_key(filing: LobbyingFiling) -> tuple[bool, float, str]:
+    """Sort key for capping: largest reported amounts first, unreported
+    (null) amounts last, uuid as the deterministic tiebreak."""
+    return (
+        filing.amount_reported is None,
+        -(filing.amount_reported or 0.0),
+        filing.lda_filing_uuid,
+    )
+
+
 def build_overlaps(
     *,
     members: dict[str, Member],
@@ -108,12 +118,18 @@ def build_overlaps(
     filings: list[QuarterFiling],
     crosswalk: Crosswalk,
     gics_lookup: dict[str, str] | None = None,
+    max_filings_per_record: int = 100,
 ) -> OverlapResult:
     """Join trades and lobbying filings on (quarter, sector).
 
     - `members`: bioguide_id -> Member (with committee assignments).
     - `gics_lookup`: optional ticker -> GICS sector name, for the
       crosswalk's GICS fallback on tickers with no explicit override.
+    - `max_filings_per_record`: cap on the lobbying evidence list per
+      record (popular sectors can attract 1000+ filings a quarter, which
+      would blow past dataset item size limits). The filings with the
+      largest reported amounts are kept; `lobbying_filing_count` on the
+      record always carries the uncapped total, so truncation is visible.
 
     A record is emitted only when a member's trade sector has at least
     one lobbying filing in the same quarter. Trades in sectors nobody
@@ -206,6 +222,17 @@ def build_overlaps(
         earliest = min(record_trades, key=lambda t: t.transaction_date)
         lag_days = (earliest.disclosure_date - earliest.transaction_date).days
 
+        all_filings = sorted(sector_filings.values(), key=_filing_evidence_key)
+        evidence = sorted(
+            all_filings[:max_filings_per_record],
+            key=lambda f: f.lda_filing_uuid,
+        )
+        if len(all_filings) > len(evidence):
+            logger.debug(
+                "record %s/%s/%s: lobbying evidence capped %d -> %d",
+                bioguide, quarter, sector, len(all_filings), len(evidence),
+            )
+
         rule = primary_rule[key]
         records.append(
             OverlapRecord(
@@ -219,9 +246,8 @@ def build_overlaps(
                 mapping_rule_id=rule.rule_id,
                 mapping_confidence=rule.confidence,
                 trades=record_trades,
-                lobbying=sorted(
-                    sector_filings.values(), key=lambda f: f.lda_filing_uuid
-                ),
+                lobbying=evidence,
+                lobbying_filing_count=len(all_filings),
                 committees=matched_committees,
                 overlap_type=overlap_type,
                 disclosure_lag_days=lag_days,
