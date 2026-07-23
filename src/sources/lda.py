@@ -56,9 +56,44 @@ _QUARTER_RE = re.compile(r"^(?P<year>\d{4})-(?P<q>Q[1-4])$")
 DEFAULT_TIMEOUT = 30.0  # seconds; LDA can be slow on large pages
 DEFAULT_PAGE_SIZE = 100  # LDA max is 100
 DEFAULT_MAX_CONCURRENCY = 5
-MAX_RETRIES = 4
+MAX_RETRIES = 7
 BACKOFF_BASE = 1.0  # seconds
 BACKOFF_CAP = 30.0  # seconds
+
+# Global request pacing. The LDA quota is per key (registered ~120/min,
+# anonymous ~15/min) and shared by ALL page tasks — per-task backoff alone
+# cannot respect a shared quota: tasks burn it in a burst, then all 429
+# together, back off together, and slam back together. These rates keep a
+# safety margin under the documented limits.
+RATE_WITH_KEY = 1.5  # req/sec ≈ 90/min
+RATE_ANONYMOUS = 0.2  # req/sec ≈ 12/min
+
+
+class _RateLimiter:
+    """Paces request starts globally and shares 429 cooldowns.
+
+    `acquire()` hands out evenly spaced start slots; `cooldown()` pushes
+    the next slot past a server-imposed wait so every task — retrying or
+    fresh — respects the same pause instead of competing for it.
+    """
+
+    def __init__(self, rate_per_sec: float) -> None:
+        self._interval = 1.0 / rate_per_sec
+        self._next_slot = 0.0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = asyncio.get_running_loop().time()
+            wait = self._next_slot - now
+            self._next_slot = max(now, self._next_slot) + self._interval
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+    def cooldown(self, seconds: float) -> None:
+        target = asyncio.get_running_loop().time() + seconds
+        if target > self._next_slot:
+            self._next_slot = target
 
 
 class LDAError(RuntimeError):
@@ -109,14 +144,17 @@ async def _get_page(
     client: httpx.AsyncClient,
     params: dict[str, str | int],
     semaphore: asyncio.Semaphore,
+    limiter: _RateLimiter,
 ) -> dict:
-    """GET one page with bounded concurrency, retry, and backoff.
+    """GET one page with global pacing, bounded concurrency, and retry.
 
-    Retries on 429 and 5xx and on transport/timeout errors. Raises
+    Retries on 429 and 5xx and on transport/timeout errors. A 429 puts
+    the WHOLE pipeline on cooldown via the shared limiter. Raises
     `LDAError` on 4xx (other than 429) and after exhausting retries.
     """
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES + 1):
+        await limiter.acquire()
         try:
             async with semaphore:
                 response = await client.get(BASE_URL, params=params)
@@ -140,6 +178,9 @@ async def _get_page(
                     f"{MAX_RETRIES + 1} attempts"
                 )
             delay = _backoff_delay(attempt, _retry_after_seconds(response))
+            if response.status_code == 429:
+                # Shared quota exhausted — pause everyone, not just this task.
+                limiter.cooldown(delay)
             logger.warning(
                 "LDA %d on page %s, attempt %d/%d, backing off %.1fs",
                 response.status_code,
@@ -148,7 +189,7 @@ async def _get_page(
                 MAX_RETRIES + 1,
                 delay,
             )
-            await asyncio.sleep(delay)
+            await asyncio.sleep(delay + random.uniform(0, 1))
             continue
 
         if response.status_code >= 400:
@@ -186,6 +227,9 @@ async def iter_raw_filings(
         "page_size": page_size,
     }
 
+    has_key = API_KEY_ENV in os.environ
+    limiter = _RateLimiter(RATE_WITH_KEY if has_key else RATE_ANONYMOUS)
+
     limits = httpx.Limits(max_connections=max_concurrency)
     async with httpx.AsyncClient(
         headers=_auth_headers(),
@@ -193,8 +237,12 @@ async def iter_raw_filings(
         limits=limits,
         follow_redirects=True,
     ) as client:
-        logger.info("Fetching LDA filings for %s (year=%d, %s)", quarter, year, period)
-        first = await _get_page(client, {**base_params, "page": 1}, semaphore)
+        logger.info(
+            "Fetching LDA filings for %s (year=%d, %s) at %.1f req/s",
+            quarter, year, period,
+            RATE_WITH_KEY if has_key else RATE_ANONYMOUS,
+        )
+        first = await _get_page(client, {**base_params, "page": 1}, semaphore, limiter)
 
         count = int(first.get("count", 0))
         results = first.get("results", [])
@@ -225,7 +273,9 @@ async def iter_raw_filings(
             )
 
         async def fetch(page: int) -> list[dict]:
-            data = await _get_page(client, {**base_params, "page": page}, semaphore)
+            data = await _get_page(
+                client, {**base_params, "page": page}, semaphore, limiter
+            )
             return data.get("results", [])
 
         tasks = [
