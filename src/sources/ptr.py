@@ -312,6 +312,7 @@ def adapt_rows(items: list[dict], members: dict[str, Member]) -> AdapterResult:
     result = AdapterResult()
     unresolved: set[str] = set()
 
+    fallback_urls = set(FALLBACK_PTR_URL.values())
     for row in _flatten_items(items):
         mapped = map_row(row)
         if isinstance(mapped, SkippedRow):
@@ -322,6 +323,15 @@ def adapt_rows(items: list[dict], members: dict[str, Member]) -> AdapterResult:
         if bioguide is None:
             unresolved.add(name)
             continue
+        # The fallback ptr_url is chosen from the ROW shape, but both
+        # source actors emit house-shaped rows for members of either
+        # chamber. Once the member is resolved we know the real chamber —
+        # point the fallback at the right disclosure portal. Row-provided
+        # URLs are never touched.
+        member = members[bioguide]
+        expected = FALLBACK_PTR_URL[member.chamber.value]
+        if trade.ptr_url in fallback_urls and trade.ptr_url != expected:
+            trade = trade.model_copy(update={"ptr_url": expected})
         result.member_trades.append(MemberTrade(bioguide, trade))
 
     result.unresolved_names = sorted(unresolved)

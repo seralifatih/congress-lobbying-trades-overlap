@@ -50,11 +50,13 @@ SENATE_ROW = {
 }
 
 
-def make_member(bioguide: str, name: str) -> Member:
+def make_member(
+    bioguide: str, name: str, chamber: Chamber = Chamber.house
+) -> Member:
     return Member(
         bioguide_id=bioguide,
         name=name,
-        chamber=Chamber.house,
+        chamber=chamber,
         party=Party.republican,
         state="MO",
         committees=[],
@@ -272,3 +274,35 @@ class TestAdaptRows:
         assert result.member_trades == []
         assert result.skipped == []
         assert result.unresolved_names == []
+
+    def test_fallback_url_follows_member_chamber(self) -> None:
+        # Production case: source actors emit house-shaped rows for BOTH
+        # chambers. A senator parsed from a house-shaped row must get the
+        # Senate disclosure portal as fallback, not the House one.
+        members = {
+            "B001236": make_member(
+                "B001236", "John Boozman", chamber=Chamber.senate
+            ),
+        }
+        row = {**HOUSE_ROW, "id": "s-row", "politician": "John Boozman"}
+        result = adapt_rows([row], members)
+        assert len(result.member_trades) == 1
+        assert result.member_trades[0].trade.ptr_url == FALLBACK_PTR_URL["senate"]
+
+    def test_explicit_url_never_rewritten(self) -> None:
+        members = {
+            "B001236": make_member(
+                "B001236", "John Boozman", chamber=Chamber.senate
+            ),
+        }
+        row = {
+            **HOUSE_ROW,
+            "id": "s-row2",
+            "politician": "John Boozman",
+            "ptr_url": "https://efdsearch.senate.gov/search/view/ptr/abc123/",
+        }
+        result = adapt_rows([row], members)
+        assert (
+            result.member_trades[0].trade.ptr_url
+            == "https://efdsearch.senate.gov/search/view/ptr/abc123/"
+        )
