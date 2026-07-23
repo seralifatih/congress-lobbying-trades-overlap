@@ -134,14 +134,42 @@ def _norm_name(name: str) -> str:
 
 _SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 
+# Common US first-name nicknames -> formal form, applied to the FIRST
+# token of the fallback key on both the roster and the input side, so
+# "Richard W. Allen" (source) matches "Rick W. Allen" (roster) and vice
+# versa. Only unambiguous pairs — nothing that maps two distinct formal
+# names onto one key (no "pat", no "chris" -> two names, etc.).
+_NICKNAME_TO_FORMAL: dict[str, str] = {
+    "abe": "abraham", "al": "albert", "andy": "andrew", "ben": "benjamin",
+    "bernie": "bernard", "bill": "william", "billy": "william",
+    "bob": "robert", "bobby": "robert", "charlie": "charles",
+    "chuck": "charles", "dan": "daniel", "danny": "daniel",
+    "dave": "david", "deb": "deborah", "debbie": "deborah",
+    "dick": "richard", "don": "donald", "doug": "douglas",
+    "ed": "edward", "eddie": "edward", "fred": "frederick",
+    "greg": "gregory", "hank": "henry", "jeff": "jeffrey",
+    "jerry": "gerald", "jim": "james", "jimmy": "james", "joe": "joseph",
+    "joey": "joseph", "jon": "jonathan", "josh": "joshua",
+    "kathy": "kathleen", "ken": "kenneth", "larry": "lawrence",
+    "liz": "elizabeth", "matt": "matthew", "mike": "michael",
+    "nick": "nicholas", "pete": "peter", "ray": "raymond",
+    "rich": "richard", "rick": "richard", "ron": "ronald",
+    "sam": "samuel", "sandy": "sandra", "steve": "steven",
+    "sue": "susan", "ted": "theodore", "tim": "timothy", "tom": "thomas",
+    "tommy": "thomas", "tony": "anthony", "vicki": "victoria",
+    "will": "william",
+}
+
 
 def _first_last_key(norm: str) -> str:
     """'james e banks jr' -> 'james banks' — fallback key that survives
-    middle names/initials and suffixes."""
+    middle names/initials, suffixes, and common nickname/formal-name
+    variation in the first token."""
     tokens = [t for t in norm.split() if t not in _SUFFIXES]
     if len(tokens) < 2:
         return norm
-    return f"{tokens[0]} {tokens[-1]}"
+    first = _NICKNAME_TO_FORMAL.get(tokens[0], tokens[0])
+    return f"{first} {tokens[-1]}"
 
 
 class NameResolver:
@@ -154,15 +182,18 @@ class NameResolver:
 
     def __init__(self, members: dict[str, Member]) -> None:
         self._exact: dict[str, str] = {}
-        fallback_counts: dict[str, list[str]] = {}
+        fallback_ids: dict[str, set[str]] = {}
         for bioguide, member in members.items():
-            norm = _norm_name(member.name)
-            self._exact[norm] = bioguide
-            fallback_counts.setdefault(_first_last_key(norm), []).append(bioguide)
+            for display in (member.name, *member.aliases):
+                norm = _norm_name(display)
+                self._exact.setdefault(norm, bioguide)
+                fallback_ids.setdefault(_first_last_key(norm), set()).add(bioguide)
         self._fallback: dict[str, str] = {
-            key: ids[0] for key, ids in fallback_counts.items() if len(ids) == 1
+            key: next(iter(ids))
+            for key, ids in fallback_ids.items()
+            if len(ids) == 1
         }
-        ambiguous = sorted(k for k, ids in fallback_counts.items() if len(ids) > 1)
+        ambiguous = sorted(k for k, ids in fallback_ids.items() if len(ids) > 1)
         if ambiguous:
             logger.debug("name resolver: %d ambiguous fallback keys", len(ambiguous))
 

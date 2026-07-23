@@ -84,6 +84,11 @@ class Member(BaseModel):
     party: Party
     state: str = Field(min_length=2, max_length=2)
     committees: list[CommitteeAssignment] = Field(default_factory=list)
+    aliases: list[str] = Field(
+        default_factory=list,
+        description="Alternate display names ('first last', 'nickname last') "
+        "for source-name resolution. Not part of the output contract.",
+    )
 
 
 class KVStore(Protocol):
@@ -305,6 +310,15 @@ def build_index(
         full_name = name.get("official_full") or (
             f"{name.get('first', '')} {name.get('last', '')}".strip()
         )
+        # Alternate display forms — PTR sources publish e.g. formal first
+        # names where the roster uses a nickname (and vice versa).
+        alias_set: set[str] = set()
+        first, last, nick = name.get("first"), name.get("last"), name.get("nickname")
+        if first and last:
+            alias_set.add(f"{first} {last}")
+        if nick and last:
+            alias_set.add(f"{nick} {last}")
+        alias_set.discard(full_name)
         plain[bioguide] = {
             "bioguide_id": bioguide,
             "name": full_name,
@@ -312,6 +326,7 @@ def build_index(
             "party": party,
             "state": str(term.get("state", "")),
             "committees": [],
+            "aliases": sorted(alias_set),
         }
 
     # Pass 2 — attach committee assignments.

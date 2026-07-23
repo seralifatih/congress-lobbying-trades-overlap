@@ -198,6 +198,51 @@ class TestNameResolver:
         members = {"A000001": make_member("A000001", "Mark Alford")}
         assert NameResolver(members).resolve("Nobody Nowhere") is None
 
+    def test_nickname_formal_mismatch(self) -> None:
+        # Real production case: roster has "Rick W. Allen" (first: Rick,
+        # no formal name anywhere in the data), House PTR source
+        # publishes "Richard W. Allen".
+        members = {"A000372": make_member("A000372", "Rick W. Allen")}
+        resolver = NameResolver(members)
+        assert resolver.resolve("Richard W. Allen") == "A000372"
+        assert resolver.resolve("Rick Allen") == "A000372"
+
+    def test_nickname_reverse_direction(self) -> None:
+        # Roster formal, source nickname.
+        members = {"M000001": make_member("M000001", "Michael Smith")}
+        assert NameResolver(members).resolve("Mike Smith") == "M000001"
+
+    def test_alias_resolution(self) -> None:
+        # Buddy Carter case: nickname not in the static table, but the
+        # roster's first name ships as an alias.
+        member = Member(
+            bioguide_id="C001103",
+            name="Buddy Carter",
+            chamber=Chamber.house,
+            party=Party.republican,
+            state="GA",
+            committees=[],
+            aliases=["Earl Carter"],
+        )
+        resolver = NameResolver({"C001103": member})
+        assert resolver.resolve("Earl L. Carter") == "C001103"
+        assert resolver.resolve("Buddy Carter") == "C001103"
+
+    def test_alias_does_not_create_false_ambiguity(self) -> None:
+        # A member's own name + alias share a fallback key — must still
+        # resolve (set semantics, not list counting).
+        member = Member(
+            bioguide_id="A000372",
+            name="Rick W. Allen",
+            chamber=Chamber.house,
+            party=Party.republican,
+            state="GA",
+            committees=[],
+            aliases=["Rick Allen"],
+        )
+        resolver = NameResolver({"A000372": member})
+        assert resolver.resolve("Richard Allen") == "A000372"
+
 
 # ---------------------------------------------------------------------------
 # adapt_rows — end to end (pure)
