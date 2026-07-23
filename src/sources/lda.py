@@ -215,15 +215,35 @@ async def iter_raw_filings(
             logger.info(
                 "LDA %s: %d filings across %d pages", quarter, count, total_pages
             )
+        if total_pages > 20 and API_KEY_ENV not in os.environ:
+            logger.warning(
+                "Fetching %d pages WITHOUT an LDA API key — anonymous access "
+                "is heavily rate-limited and this will very likely fail with "
+                "429s. Register a free key at lda.senate.gov and set the "
+                "lda_api_key input (or %s).",
+                total_pages, API_KEY_ENV,
+            )
 
         async def fetch(page: int) -> list[dict]:
             data = await _get_page(client, {**base_params, "page": page}, semaphore)
             return data.get("results", [])
 
-        tasks = [fetch(page) for page in range(2, total_pages + 1)]
-        for coro in asyncio.as_completed(tasks):
-            for item in await coro:
-                yield item
+        tasks = [
+            asyncio.create_task(fetch(page))
+            for page in range(2, total_pages + 1)
+        ]
+        try:
+            for coro in asyncio.as_completed(tasks):
+                for item in await coro:
+                    yield item
+        finally:
+            # On any early exit (page error after retries, cancelled
+            # consumer) cancel the remaining page tasks BEFORE the client
+            # context closes — otherwise they fire against a closed client
+            # and flood the log with unretrieved-task exceptions.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _parse_amount(raw: object) -> float | None:
