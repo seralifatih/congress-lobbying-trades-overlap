@@ -104,7 +104,7 @@ All sources are official or community-maintained public records. No scraping of 
 | `quarters` | array | last completed quarter | Quarters to cover, e.g. `["2026-Q1"]` |
 | `chambers` | array | `["house", "senate"]` | Which chambers to scan |
 | `overlap_types` | array | both | Filter to `committee_match` and/or `sector_match_only` |
-| `lda_api_key` | secret | — | Free key from lda.senate.gov. Without one, the actor still runs but at the anonymous rate limit — expect a single-quarter run to take several times longer, and multi-quarter runs may hit the LDA throttle |
+| `lda_api_key` | secret | — | Optional. The actor ships with a shared key sufficient for typical runs. Provide your own free key from lda.senate.gov for heavy multi-quarter backfills or guaranteed throughput. |
 | `max_concurrency` | integer | `5` | Outbound API concurrency |
 | `lda_max_pages` | integer | — | Debug cap for cheap test runs |
 

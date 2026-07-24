@@ -8,7 +8,9 @@ Design constraints enforced here:
 - Bounded concurrency via an asyncio.Semaphore.
 - Every request has an explicit timeout.
 - Retry with exponential backoff; 429 honours `Retry-After` when present.
-- API key read from env, sent as `Authorization: Token <key>`.
+- API key resolved via `resolve_api_key()` — actor input, then the
+  `LDA_API_KEY` env var, else anonymous — sent as `Authorization: Token
+  <key>`. The key value itself is never logged, only which mode won.
 
 Standalone use — fetch one quarter to JSON for manual inspection:
 
@@ -29,6 +31,7 @@ import random
 import re
 import sys
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 import httpx
 
@@ -56,9 +59,9 @@ _QUARTER_RE = re.compile(r"^(?P<year>\d{4})-(?P<q>Q[1-4])$")
 DEFAULT_TIMEOUT = 30.0  # seconds; LDA can be slow on large pages
 DEFAULT_PAGE_SIZE = 100  # LDA max is 100
 DEFAULT_MAX_CONCURRENCY = 5
-MAX_RETRIES = 7
-BACKOFF_BASE = 1.0  # seconds
-BACKOFF_CAP = 30.0  # seconds
+MAX_RETRIES = 6
+BACKOFF_BASE = 5.0  # seconds
+BACKOFF_CAP = 120.0  # seconds
 
 # Global request pacing. The LDA quota is per key (registered ~120/min,
 # anonymous ~15/min) and shared by ALL page tasks — per-task backoff alone
@@ -100,6 +103,14 @@ class LDAError(RuntimeError):
     """Non-retryable failure talking to the LDA API."""
 
 
+class LDAThrottled(RuntimeError):
+    """A page gave up after exhausting retries against a 429.
+
+    Not a hard failure — the caller should finish the run cleanly with
+    whatever filings were already fetched, and flag it in RUN_SUMMARY.
+    """
+
+
 def _parse_quarter(quarter: str) -> tuple[int, str]:
     """'2026-Q1' -> (2026, 'first_quarter'). Raise on malformed input."""
     match = _QUARTER_RE.match(quarter)
@@ -109,15 +120,24 @@ def _parse_quarter(quarter: str) -> tuple[int, str]:
     return year, _QUARTER_TO_PERIOD[match["q"]]
 
 
-def _auth_headers() -> dict[str, str]:
+def resolve_api_key(input_key: str | None) -> tuple[str | None, str]:
+    """Resolve the LDA key: actor input wins, then env var, else anonymous.
+
+    Returns (key, mode) where mode is one of "input", "env", "anonymous".
+    Never logs the key itself — callers should log only `mode`.
+    """
+    if input_key:
+        return str(input_key), "input"
+    env_key = os.environ.get(API_KEY_ENV)
+    if env_key:
+        return env_key, "env"
+    return None, "anonymous"
+
+
+def _auth_headers(key: str | None) -> dict[str, str]:
     headers = {"Accept": "application/json"}
-    key = os.environ.get(API_KEY_ENV)
     if key:
         headers["Authorization"] = f"Token {key}"
-    else:
-        logger.warning(
-            "%s not set; using anonymous access (lower rate limit).", API_KEY_ENV
-        )
     return headers
 
 
@@ -150,7 +170,9 @@ async def _get_page(
 
     Retries on 429 and 5xx and on transport/timeout errors. A 429 puts
     the WHOLE pipeline on cooldown via the shared limiter. Raises
-    `LDAError` on 4xx (other than 429) and after exhausting retries.
+    `LDAThrottled` after exhausting retries against a 429 (the caller may
+    treat this as a soft stop), `LDAError` on other 4xx and on exhausted
+    5xx/transport retries.
     """
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES + 1):
@@ -173,6 +195,11 @@ async def _get_page(
 
         if response.status_code == 429 or response.status_code >= 500:
             if attempt == MAX_RETRIES:
+                if response.status_code == 429:
+                    raise LDAThrottled(
+                        f"LDA API returned 429 on page {params.get('page')} "
+                        f"after {MAX_RETRIES + 1} attempts"
+                    )
                 raise LDAError(
                     f"LDA API returned {response.status_code} after "
                     f"{MAX_RETRIES + 1} attempts"
@@ -211,6 +238,7 @@ async def iter_raw_filings(
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     timeout: float = DEFAULT_TIMEOUT,
     max_pages: int | None = None,
+    api_key: str | None = None,
 ) -> AsyncIterator[dict]:
     """Yield raw filing dicts for a quarter, paging through all results.
 
@@ -218,6 +246,11 @@ async def iter_raw_filings(
     with bounded concurrency. `max_pages` caps the number of pages fetched
     (a full quarter is tens of thousands of filings) — used mainly for the
     standalone-inspection CLI. None means fetch everything.
+
+    `api_key` should already be resolved by the caller via
+    `resolve_api_key()` (input > env > anonymous); this function only
+    ever sees the winning key, never decides between sources itself.
+    Falls back to the env var directly for standalone/CLI use.
     """
     year, period = _parse_quarter(quarter)
     semaphore = asyncio.Semaphore(max_concurrency)
@@ -227,12 +260,13 @@ async def iter_raw_filings(
         "page_size": page_size,
     }
 
-    has_key = API_KEY_ENV in os.environ
+    key = api_key if api_key is not None else os.environ.get(API_KEY_ENV)
+    has_key = key is not None
     limiter = _RateLimiter(RATE_WITH_KEY if has_key else RATE_ANONYMOUS)
 
     limits = httpx.Limits(max_connections=max_concurrency)
     async with httpx.AsyncClient(
-        headers=_auth_headers(),
+        headers=_auth_headers(key),
         timeout=httpx.Timeout(timeout),
         limits=limits,
         follow_redirects=True,
@@ -242,7 +276,16 @@ async def iter_raw_filings(
             quarter, year, period,
             RATE_WITH_KEY if has_key else RATE_ANONYMOUS,
         )
-        first = await _get_page(client, {**base_params, "page": 1}, semaphore, limiter)
+        try:
+            first = await _get_page(
+                client, {**base_params, "page": 1}, semaphore, limiter
+            )
+        except LDAThrottled:
+            logger.warning(
+                "LDA %s: throttled fetching page 1; stopping this quarter "
+                "with zero filings.", quarter,
+            )
+            return
 
         count = int(first.get("count", 0))
         results = first.get("results", [])
@@ -263,7 +306,7 @@ async def iter_raw_filings(
             logger.info(
                 "LDA %s: %d filings across %d pages", quarter, count, total_pages
             )
-        if total_pages > 20 and API_KEY_ENV not in os.environ:
+        if total_pages > 20 and not has_key:
             logger.warning(
                 "Fetching %d pages WITHOUT an LDA API key — anonymous access "
                 "is heavily rate-limited and this will very likely fail with "
@@ -282,18 +325,32 @@ async def iter_raw_filings(
             asyncio.create_task(fetch(page))
             for page in range(2, total_pages + 1)
         ]
+        throttled = False
         try:
             for coro in asyncio.as_completed(tasks):
-                for item in await coro:
+                try:
+                    items = await coro
+                except LDAThrottled:
+                    logger.warning(
+                        "LDA %s: throttled after exhausting retries on a "
+                        "page; stopping this quarter with filings gathered "
+                        "so far.", quarter,
+                    )
+                    throttled = True
+                    break
+                for item in items:
                     yield item
         finally:
-            # On any early exit (page error after retries, cancelled
-            # consumer) cancel the remaining page tasks BEFORE the client
-            # context closes — otherwise they fire against a closed client
-            # and flood the log with unretrieved-task exceptions.
+            # On any early exit (throttled, page error after retries,
+            # cancelled consumer) cancel the remaining page tasks BEFORE
+            # the client context closes — otherwise they fire against a
+            # closed client and flood the log with unretrieved-task
+            # exceptions.
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+        if throttled:
+            raise LDAThrottled(f"LDA {quarter}: throttled, partial results only")
 
 
 def _parse_amount(raw: object) -> float | None:
@@ -349,6 +406,18 @@ def map_filing(raw: dict) -> LobbyingFiling | None:
         raise LDAError(f"LDA filing missing required field {exc}") from exc
 
 
+@dataclass
+class QuarterResult:
+    """Outcome of fetching one quarter. `throttled=True` means retries
+    were exhausted against a 429 partway through — `filings` still holds
+    whatever was gathered before that point, and the caller should
+    surface `lda_throttled: true` in RUN_SUMMARY rather than fail the run.
+    """
+
+    filings: list[LobbyingFiling]
+    throttled: bool = False
+
+
 async def fetch_quarter(
     quarter: str,
     *,
@@ -356,43 +425,50 @@ async def fetch_quarter(
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     timeout: float = DEFAULT_TIMEOUT,
     max_pages: int | None = None,
-) -> list[LobbyingFiling]:
+    api_key: str | None = None,
+) -> QuarterResult:
     """Fetch and map every filing for a quarter into `LobbyingFiling`s."""
     filings: list[LobbyingFiling] = []
     skipped = 0
-    async for raw in iter_raw_filings(
-        quarter,
-        page_size=page_size,
-        max_concurrency=max_concurrency,
-        timeout=timeout,
-        max_pages=max_pages,
-    ):
-        mapped = map_filing(raw)
-        if mapped is None:
-            skipped += 1
-            continue
-        filings.append(mapped)
+    throttled = False
+    try:
+        async for raw in iter_raw_filings(
+            quarter,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            timeout=timeout,
+            max_pages=max_pages,
+            api_key=api_key,
+        ):
+            mapped = map_filing(raw)
+            if mapped is None:
+                skipped += 1
+                continue
+            filings.append(mapped)
+    except LDAThrottled:
+        throttled = True
     logger.info(
-        "LDA %s: mapped %d filings, skipped %d (no issue codes)",
+        "LDA %s: mapped %d filings, skipped %d (no issue codes)%s",
         quarter,
         len(filings),
         skipped,
+        ", THROTTLED (partial)" if throttled else "",
     )
-    return filings
+    return QuarterResult(filings=filings, throttled=throttled)
 
 
 # --------------------------------------------------------------------------
 # Standalone CLI — fetch one quarter to JSON for manual inspection.
 # --------------------------------------------------------------------------
 async def _main_async(args: argparse.Namespace) -> int:
-    filings = await fetch_quarter(
+    result = await fetch_quarter(
         args.quarter,
         page_size=args.page_size,
         max_concurrency=args.concurrency,
         timeout=args.timeout,
         max_pages=args.max_pages,
     )
-    payload = [f.model_dump(mode="json") for f in filings]
+    payload = [f.model_dump(mode="json") for f in result.filings]
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -400,6 +476,8 @@ async def _main_async(args: argparse.Namespace) -> int:
     else:
         json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
         print(file=sys.stdout)
+    if result.throttled:
+        print("warning: throttled, results are partial", file=sys.stderr)
     return 0
 
 

@@ -10,7 +10,6 @@ overlapped is itself information (see pricing rationale in CLAUDE.md).
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import date, datetime, timezone
 
 from apify import Actor
@@ -22,6 +21,11 @@ from .sources import lda, ptr
 from .sources.legislators import load_members
 
 VALID_CHAMBERS = ("house", "senate")
+
+# Hard cap on outbound concurrency regardless of what the caller requests.
+# The shared LDA key's quota is per-key, not per-run — one user with a high
+# max_concurrency input could starve every other run using the shared key.
+MAX_ALLOWED_CONCURRENCY = 10
 
 
 def previous_quarter(today: date) -> str:
@@ -50,15 +54,33 @@ async def main() -> None:
             )
         )
         max_concurrency: int = int(actor_input.get("max_concurrency", 5))
+        if max_concurrency > MAX_ALLOWED_CONCURRENCY:
+            Actor.log.warning(
+                "max_concurrency=%d exceeds the cap of %d; clamping down to "
+                "protect the shared LDA key's rate limit from a single run.",
+                max_concurrency, MAX_ALLOWED_CONCURRENCY,
+            )
+            max_concurrency = MAX_ALLOWED_CONCURRENCY
         lda_max_pages: int | None = actor_input.get("lda_max_pages") or None
         max_filings_per_record: int = int(
             actor_input.get("max_filings_per_record", 100)
         )
 
-        # LDA key: input field wins, else pre-set env var. lda.py reads env.
-        lda_key = actor_input.get("lda_api_key")
-        if lda_key:
-            os.environ[lda.API_KEY_ENV] = str(lda_key)
+        # LDA key: actor input wins, then LDA_API_KEY env var, else
+        # anonymous. Never log the key itself — only which mode is used.
+        lda_key, lda_key_mode = lda.resolve_api_key(actor_input.get("lda_api_key"))
+        Actor.log.info(
+            "LDA key mode: %s",
+            {
+                "input": "using user-provided key",
+                "env": "using shared key",
+                "anonymous": "anonymous mode",
+            }[lda_key_mode],
+        )
+        if lda_key_mode == "anonymous":
+            Actor.log.warning(
+                "No LDA key available; expect slow runs and possible throttling."
+            )
 
         Actor.log.info(
             "Run config: quarters=%s chambers=%s overlap_types=%s "
@@ -80,13 +102,21 @@ async def main() -> None:
                     quarter,
                     max_concurrency=max_concurrency,
                     max_pages=lda_max_pages,
+                    api_key=lda_key,
                 )
                 for quarter in quarters
             ),
         )
         (members, unmapped_committees) = results[0]
         ptr_items_per_chamber = results[1 : 1 + len(chambers)]
-        lda_per_quarter = results[1 + len(chambers) :]
+        lda_quarter_results: list[lda.QuarterResult] = results[1 + len(chambers) :]
+        lda_per_quarter = [r.filings for r in lda_quarter_results]
+        lda_throttled = any(r.throttled for r in lda_quarter_results)
+        if lda_throttled:
+            Actor.log.warning(
+                "One or more LDA quarters were throttled; continuing with "
+                "partial lobbying filings for those quarters."
+            )
 
         # --- Adapt trades (needs the member index for name resolution) ---
         adapter = ptr.AdapterResult()
@@ -167,6 +197,7 @@ async def main() -> None:
                 SourceFreshness(source="congress_trades_actors", fetched_at=fetched_at),
                 SourceFreshness(source="congress_legislators", fetched_at=fetched_at),
             ],
+            lda_throttled=lda_throttled,
         )
         await store.set_value("RUN_SUMMARY", summary.model_dump(mode="json"))
 

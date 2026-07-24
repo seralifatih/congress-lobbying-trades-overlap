@@ -38,16 +38,16 @@
         "max_concurrency": {
             "title": "Max concurrency",
             "type": "integer",
-            "description": "Bounded concurrency for outbound API calls (respect LDA rate limits).",
+            "description": "Bounded concurrency for outbound API calls (respect LDA rate limits). Clamped to 10 server-side regardless of the value entered here, to protect the shared LDA key's rate limit.",
             "editor": "number",
             "default": 5,
             "minimum": 1,
-            "maximum": 20
+            "maximum": 10
         },
         "lda_api_key": {
             "title": "Senate LDA API key",
             "type": "string",
-            "description": "Registered API key for lda.senate.gov (free). Optional but strongly recommended — anonymous access is heavily rate-limited.",
+            "description": "Optional. The actor ships with a shared key sufficient for typical runs. Provide your own free key from lda.senate.gov for heavy multi-quarter backfills or guaranteed throughput.",
             "editor": "textfield",
             "isSecret": true
         },

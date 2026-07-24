@@ -244,6 +244,12 @@ class RunSummary(BaseModel):
     )
     unmapped: list[UnmappedItem] = Field(default_factory=list)
     source_freshness: list[SourceFreshness] = Field(default_factory=list)
+    lda_throttled: bool = Field(
+        default=False,
+        description="True if any LDA quarter gave up on a page after "
+        "exhausting retries against a 429 — the run still completed with "
+        "whatever filings were fetched before that point.",
+    )
 
     @field_validator("quarters_covered")
     @classmethod
