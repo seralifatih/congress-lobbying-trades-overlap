@@ -8,7 +8,7 @@ Every output row is traceable to specific filing IDs and source URLs. This is a 
 
 > **An overlap is not a finding of wrongdoing.** Members of Congress trade securities and industries lobby Congress; both are legal, disclosed, and continuous. Co-occurrence within a quarter is a factual observation about two public datasets, nothing more. This actor makes no claim of causation and emits no trade recommendations.
 
-Works as a companion to [`congress-house-trades`](https://apify.com/seralifatih/congress-house-trades) and [`congress-senate-trades`](https://apify.com/seralifatih/congress-senate-trades) — it reads their trade data directly, so records stay consistent across all three.
+Works as a companion to the [House Trading Pipeline](https://apify.com/seralifatih/congress-trading-pipeline-1) and the [Senate Trading Pipeline](https://apify.com/seralifatih/congress-trading-pipeline) — it reads their trade data directly, so records stay consistent across all three.
 
 ## What you get
 
@@ -92,7 +92,7 @@ If you build on this data, you know exactly what joined to what and why. That is
 | Source | What it provides |
 |---|---|
 | Senate LDA REST API (`lda.senate.gov`) | Quarterly lobbying filings: registrant, client, issue codes, reported amounts |
-| `congress-house-trades` / `congress-senate-trades` actors | Member stock transactions from PTR filings |
+| [House](https://apify.com/seralifatih/congress-trading-pipeline-1) / [Senate](https://apify.com/seralifatih/congress-trading-pipeline) trading pipeline actors | Member stock transactions from PTR filings |
 | `unitedstates/congress-legislators` | Member roster and committee membership (cached, refreshed monthly) |
 
 All sources are official or community-maintained public records. No scraping of third-party aggregators.
@@ -104,7 +104,7 @@ All sources are official or community-maintained public records. No scraping of 
 | `quarters` | array | last completed quarter | Quarters to cover, e.g. `["2026-Q1"]` |
 | `chambers` | array | `["house", "senate"]` | Which chambers to scan |
 | `overlap_types` | array | both | Filter to `committee_match` and/or `sector_match_only` |
-| `lda_api_key` | secret | — | Free key from lda.senate.gov; strongly recommended (anonymous access is heavily rate-limited) |
+| `lda_api_key` | secret | — | Free key from lda.senate.gov. Without one, the actor still runs but at the anonymous rate limit — expect a single-quarter run to take several times longer, and multi-quarter runs may hit the LDA throttle |
 | `max_concurrency` | integer | `5` | Outbound API concurrency |
 | `lda_max_pages` | integer | — | Debug cap for cheap test runs |
 
@@ -128,7 +128,7 @@ curl -X POST "https://api.apify.com/v2/acts/seralifatih~congress-lobbying-trades
 
 ## Pricing
 
-**Flat per-run.** You know the cost before you start it, whatever the quarter contains — same model as the House and Senate trades actors. A run that returns zero overlaps still delivers the run summary and the negative result, which for archival use is an answer, not a failure.
+**Predictable per-run pricing.** A small flat start fee plus a fixed charge per quarter processed — you know the exact cost before you run, because you choose the quarters in the input. One quarter or eight, the bill follows your selection, not the number of overlaps found. A run that returns zero overlaps still delivers the run summary and the negative result, which for archival use is an answer, not a failure.
 
 ## Tech
 
