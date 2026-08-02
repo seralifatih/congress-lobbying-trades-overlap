@@ -24,7 +24,7 @@ Rationale: a previous actor (`pm-arbitrage`) failed because it sold a perishable
 
 | Source | Access | Cadence | Notes |
 |---|---|---|---|
-| Senate LDA REST API | `lda.senate.gov/api/` — free, needs registered API key | Quarterly | Primary lobbying source. Rate-limited; respect it. |
+| Senate LDA REST API | `lda.gov/api/` — free, needs registered API key | Quarterly | Primary lobbying source. Rate-limited; respect it. |
 | House Clerk LD-1/LD-2 | XML bulk download | Quarterly | Overlaps heavily with Senate LDA. Use as fill-in, not primary. |
 | House PTR filings | Existing actor's pipeline | Ad hoc (45-day window) | Reuse, do not rewrite. |
 | Senate PTR filings | Existing actor's pipeline | Ad hoc | Reuse, do not rewrite. |

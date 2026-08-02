@@ -1,6 +1,6 @@
 """Senate LDA REST API source.
 
-Fetches quarterly LD-2 filings from lda.senate.gov and maps raw responses
+Fetches quarterly LD-2 filings from lda.gov and maps raw responses
 to the `LobbyingFiling` model. This is the primary lobbying source
 (House Clerk XML is fill-in only — see CLAUDE.md).
 
@@ -44,8 +44,19 @@ else:  # pragma: no cover - only when run as a loose script
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://lda.senate.gov/api/v1/filings/"
+# The API moved off lda.senate.gov in 2026: that host now 301s to lda.gov
+# and 302s to the homepage, discarding the API path. Because the redirect
+# lands on a 200 HTML page, pointing at the old host fails as a JSON decode
+# error rather than an HTTP error — hence `_ensure_json` below.
+BASE_URL = "https://lda.gov/api/v1/filings/"
 API_KEY_ENV = "LDA_API_KEY"
+
+# lda.gov sits behind Akamai, which 403s known scripting-client user agents
+# (python-httpx, requests, curl) with an HTML "Access Denied" page. The
+# `Mozilla/5.0 (compatible; ...)` form is the standard way for a non-browser
+# client to get served while still identifying itself honestly — we do not
+# claim to be a browser.
+USER_AGENT = "Mozilla/5.0 (compatible; congress-lobbying-overlap-actor/1.0)"
 
 # Our quarter label (2026-Q1) -> LDA filing_period query value.
 _QUARTER_TO_PERIOD: dict[str, str] = {
@@ -135,7 +146,7 @@ def resolve_api_key(input_key: str | None) -> tuple[str | None, str]:
 
 
 def _auth_headers(key: str | None) -> dict[str, str]:
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     if key:
         headers["Authorization"] = f"Token {key}"
     return headers
@@ -158,6 +169,30 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     except ValueError:
         logger.debug("Unparseable Retry-After header: %r", value)
         return None
+
+
+def _ensure_json(response: httpx.Response) -> dict:
+    """Decode a 2xx body as JSON, or raise LDAError naming the real cause.
+
+    A redirect to an HTML page (host move, captive portal, WAF interstitial)
+    arrives as a 200 whose body is HTML, so the status checks above pass and
+    `.json()` blows up with an opaque JSONDecodeError. Fail loudly instead,
+    reporting where we actually landed.
+    """
+    content_type = response.headers.get("Content-Type", "")
+    if "json" not in content_type.lower():
+        raise LDAError(
+            f"LDA returned {response.status_code} with non-JSON Content-Type "
+            f"{content_type!r} from {response.url} — the API endpoint may have "
+            f"moved or the request was intercepted. Body: {response.text[:200]!r}"
+        )
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise LDAError(
+            f"LDA returned undecodable JSON from {response.url}: {exc}. "
+            f"Body: {response.text[:200]!r}"
+        ) from exc
 
 
 async def _get_page(
@@ -225,7 +260,14 @@ async def _get_page(
                 f"{response.text[:300]}"
             )
 
-        return response.json()
+        if response.is_redirect:
+            raise LDAError(
+                f"LDA API redirected ({response.status_code}) from {BASE_URL} "
+                f"to {response.headers.get('Location')!r} — the endpoint has "
+                f"likely moved; update BASE_URL."
+            )
+
+        return _ensure_json(response)
 
     # Loop only exits here after transport/timeout retries are exhausted.
     raise LDAError(f"LDA request failed after retries: {last_exc}")
@@ -269,7 +311,11 @@ async def iter_raw_filings(
         headers=_auth_headers(key),
         timeout=httpx.Timeout(timeout),
         limits=limits,
-        follow_redirects=True,
+        # Deliberately NOT following redirects: this is a fixed API endpoint
+        # that should never legitimately redirect. Following them is how the
+        # 2026 lda.senate.gov -> lda.gov move surfaced as an opaque JSON
+        # decode error instead of an obvious failure. A 3xx now raises.
+        follow_redirects=False,
     ) as client:
         logger.info(
             "Fetching LDA filings for %s (year=%d, %s) at %.1f req/s",
@@ -310,7 +356,7 @@ async def iter_raw_filings(
             logger.warning(
                 "Fetching %d pages WITHOUT an LDA API key — anonymous access "
                 "is heavily rate-limited and this will very likely fail with "
-                "429s. Register a free key at lda.senate.gov and set the "
+                "429s. Register a free key at lda.gov and set the "
                 "lda_api_key input (or %s).",
                 total_pages, API_KEY_ENV,
             )

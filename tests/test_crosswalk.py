@@ -23,7 +23,7 @@ from src.crosswalk import (
 from src.models import MappingConfidence
 
 # The 79 official LDA general issue area codes, fetched from
-# lda.senate.gov/api/v1/constants/filing/lobbyingactivityissues/ (2026-07).
+# lda.gov/api/v1/constants/filing/lobbyingactivityissues/ (2026-07).
 # If the LDA adds codes, this list and data/crosswalk.yaml both change.
 OFFICIAL_LDA_CODES = [
     "ACC", "ADV", "AER", "AGR", "ALC", "ANI", "APP", "ART", "AUT", "AVI",

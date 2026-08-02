@@ -41,7 +41,7 @@ One record per **(member, quarter, sector)** overlap — not one per trade, not 
   "lobbying": [
     {
       "lda_filing_uuid": "7866327b-c892-4430-b9f0-1f0f679c58c6",
-      "lda_url": "https://lda.senate.gov/api/v1/filings/7866327b-.../",
+      "lda_url": "https://lda.gov/api/v1/filings/7866327b-.../",
       "registrant": "Example Government Affairs LLC",
       "client": "Example Defense Corp",
       "issue_codes": ["DEF", "BUD"],
@@ -91,7 +91,7 @@ If you build on this data, you know exactly what joined to what and why. That is
 
 | Source | What it provides |
 |---|---|
-| Senate LDA REST API (`lda.senate.gov`) | Quarterly lobbying filings: registrant, client, issue codes, reported amounts |
+| Senate LDA REST API (`lda.gov`) | Quarterly lobbying filings: registrant, client, issue codes, reported amounts |
 | [House](https://apify.com/seralifatih/congress-trading-pipeline-1) / [Senate](https://apify.com/seralifatih/congress-trading-pipeline) trading pipeline actors | Member stock transactions from PTR filings |
 | `unitedstates/congress-legislators` | Member roster and committee membership (cached, refreshed monthly) |
 
@@ -104,7 +104,7 @@ All sources are official or community-maintained public records. No scraping of 
 | `quarters` | array | last completed quarter | Quarters to cover, e.g. `["2026-Q1"]` |
 | `chambers` | array | `["house", "senate"]` | Which chambers to scan |
 | `overlap_types` | array | both | Filter to `committee_match` and/or `sector_match_only` |
-| `lda_api_key` | secret | — | Optional. The actor ships with a shared key sufficient for typical runs. Provide your own free key from lda.senate.gov for heavy multi-quarter backfills or guaranteed throughput. |
+| `lda_api_key` | secret | — | Optional. The actor ships with a shared key sufficient for typical runs. Provide your own free key from lda.gov for heavy multi-quarter backfills or guaranteed throughput. |
 | `max_concurrency` | integer | `5` | Outbound API concurrency |
 | `lda_max_pages` | integer | — | Debug cap for cheap test runs |
 

@@ -76,7 +76,7 @@ sectors:
   - veterans
 
 # All 79 LDA general issue area codes, per
-# lda.senate.gov/api/v1/constants/filing/lobbyingactivityissues/ (2026-07).
+# lda.gov/api/v1/constants/filing/lobbyingactivityissues/ (2026-07).
 issue_codes:
   ACC:
     name: Accounting

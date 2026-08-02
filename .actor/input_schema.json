@@ -47,7 +47,7 @@
         "lda_api_key": {
             "title": "Senate LDA API key",
             "type": "string",
-            "description": "Optional. The actor ships with a shared key sufficient for typical runs. Provide your own free key from lda.senate.gov for heavy multi-quarter backfills or guaranteed throughput.",
+            "description": "Optional. The actor ships with a shared key sufficient for typical runs. Provide your own free key from lda.gov for heavy multi-quarter backfills or guaranteed throughput.",
             "editor": "textfield",
             "isSecret": true
         },

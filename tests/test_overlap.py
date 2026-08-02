@@ -87,7 +87,7 @@ def make_filing(
 ) -> LobbyingFiling:
     return LobbyingFiling(
         lda_filing_uuid=uuid,
-        lda_url=f"https://lda.senate.gov/api/v1/filings/{uuid}/",
+        lda_url=f"https://lda.gov/api/v1/filings/{uuid}/",
         registrant="Reg LLC",
         client="Client Corp",
         issue_codes=issue_codes or ["DEF"],
