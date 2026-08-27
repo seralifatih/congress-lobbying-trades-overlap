@@ -1,0 +1,21 @@
+name: DocDrifter
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  pull-requests: write
+  contents: read
+  id-token: write
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seralifatih/docdrifter@v1
+        with:
+          src-path: "src/"
+          docs-path: "README.md"
+          repo-description: "an Apify actor that joins US federal lobbying disclosures (LDA) with Congressional stock trading disclosures (STOCK Act PTR) into auditable overlap records"
