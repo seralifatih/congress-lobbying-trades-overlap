@@ -65,6 +65,9 @@ async def main() -> None:
         max_filings_per_record: int = int(
             actor_input.get("max_filings_per_record", 100)
         )
+        min_disclosure_lag_days: int = int(
+            actor_input.get("min_disclosure_lag_days", 0)
+        )
 
         # LDA key: actor input wins, then LDA_API_KEY env var, else
         # anonymous. Never log the key itself — only which mode is used.
